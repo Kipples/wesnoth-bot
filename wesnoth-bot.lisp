@@ -205,22 +205,6 @@
 	:handler (lambda (,lambda-list)
 		   ,@body)))))
 
-(define-wesnoth-command help *default-command-prefix* "help" (params)
-    "displays help message use !help command for command specific help"
-  (let ((help-command (car (member-if (lambda (command)
-				      (match-wesnoth-bot-command command (car params)))
-				    (wesnoth-bot-commands *current-bot*)))))
-    (wml-message
-     *current-bot*
-     (if help-command
-	 (wesnoth-bot-command-doc-string help-command)
-	 "displays help message use !help command for command specific help"))))
-
-(define-wesnoth-command quit *default-command-prefix* "quit" (params)
-    "stops the bot quitting it from the server"
-  (stop-bot *current-bot*))
-
-
 (defmacro define-wesnoth-bot-spawner (name version (&rest commands) &body body)
   `(progn
      (defun ,(intern (format nil "MAKE-~a" (string name))) (username &optional (password))
@@ -235,6 +219,3 @@
 		       :name (string username)
 		       :initial-bindings (acons 'password password
 						(acons 'username username bt:*default-special-bindings*))))))
-
-(define-wesnoth-bot-spawner boring-bot "1.12.6" (help quit)
-  (start-bot *current-bot*))
