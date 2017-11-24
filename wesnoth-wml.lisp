@@ -69,11 +69,15 @@
 								     (eighth thing))
 								   rest-strings))))))
 
+(defrule text-domain (and ws "#textdomain " ws (* (not #\Newline)) newline)
+  (:function fourth)
+  (:text t))
+
 ;; attribute `attribute-key` = `attribute-value`
-(defrule attribute (and attribute-key #\= attribute-value newline)
-  (:destructure (key assign val newline)
+(defrule attribute (and (? text-domain) attribute-key #\= attribute-value newline)
+  (:destructure (text-domain key assign val newline)
 		(declare (ignore assign newline))
-		(list :attribute key val)))
+		(list :attribute key val text-domain)))
 
 (defrule comment (and ws #\# (* (not #\Newline)) newline)
   (:destructure (ws hash comment nl)
@@ -91,80 +95,9 @@
 (defrule ping (and attribute-key #\= attribute-value)
   (:destructure (key assign val)
 		(declare (ignore assign))
-		(list :attribute key val)))
+		(list (list :attribute key val))))
 (defrule wml-or-ping (or wml ping)
-  (:lambda (wml-or-ping)
-    (if (eql :attribute (car wml-or-ping))
-	(acons "ping" (list (process-esrap-wml-attribute wml-or-ping)) '())
-	(process-esrap-wml wml-or-ping))))
-
-;; the following functions take the output from the esrap parsing and
-;; process it into a alist form e.g.
-;; '("top_level_tag" ("nested_tag" ("an_attribute" . 2))
-
-(defun process-esrap-wml (esrap-wml)
-  (process-esrap-wml-fix-missing-top-level-tag (mapcar #'process-esrap-wml-tags esrap-wml)))
-
-;; if the processed esrap-wml contains any attributes inside the root node
-;; guess which top level tag it needs
-(defun process-esrap-wml-fix-missing-top-level-tag (wml)
-  (if (not (every #'wml-tag-p wml))
-      (process-esrap-wml-add-top-level-tag-heuristic wml)
-      wml))
-
-;; right now multiplayer is the only message that doesn't get sent with a top level tag
-;; so i fix it here this appears to be fixed for wesnoth verison 1.13 for 1.14
-(defun process-esrap-wml-add-top-level-tag-heuristic (wml)
-  `(("multiplayer" ,@wml)))
-
-(defun process-esrap-wml-tags (esrap-wml)
-  (if (eql :attribute (car esrap-wml))
-      (process-esrap-wml-attribute esrap-wml)
-      (let ((node (car esrap-wml)))
-	(if (eql :open (car node))
-	    (cons (cadr node) (process-esrap-wml-tag-contents (cadr esrap-wml)))))))
-
-(defun process-esrap-wml-tag-contents (esrap-wml)
-  (mapcar #'process-esrap-wml-attibutes-and-nested-tags esrap-wml))
-
-(defun process-esrap-wml-attibutes-and-nested-tags (esrap-wml)
-  (if (eql :attribute (car esrap-wml))
-      (process-esrap-wml-attribute esrap-wml)
-      (process-esrap-wml-tags esrap-wml)))
-
-(defun process-esrap-wml-attribute (esrap-wml)
-  (cons (cadr esrap-wml) (strip-surrounding-double-quotes (caddr esrap-wml))))
-
-(defun strip-surrounding-double-quotes (str)
-  (let ((first-dq (position #\" str))
-	(last-dq (position #\" str :from-end t)))
-    (if (and (eq first-dq 0)
-	     (eq last-dq (1- (length str))))
-	(subseq str 1 (1- (length str)))
-	str)))
-
-(defun wml-tag-p (wml)
-  (listp (cdr wml)))
-
-(defun wml-attr-p (wml)
-  (not (wml-tag-p wml)))
-
-(defun wml-comment-p (wml)
-  (when (wml-attr-p wml)
-      (equal "comment" (car wml))))
-
-(defun wml-alist-to-string (wml)
-  (format nil "~{~a~%~}" (mapcar #'wml-alist-node-to-string wml)))
-
-(defun wml-alist-node-to-string (wml-node)
-  (if (wml-comment-p wml-node)
-      (format nil "#~a" (cdr wml-node))
-      (if (wml-attr-p wml-node)
-	  (format nil "~a=\"~a\"" (car wml-node) (cdr wml-node))
-	  (format nil "[~a]~%~{~a~%~}[/~a]"
-		  (car wml-node)
-		  (mapcar #'wml-alist-node-to-string (cdr wml-node))
-		  (car wml-node)))))
+  (:function esrap->wml-node))
 
 ;; interface
 
@@ -179,34 +112,106 @@
 			       until (eq line 'eof)
 			       collect line)))))
 
-(defun wml-alist-sort (wml)
-  "takes a WML alist and sort it's attributes as this is required for valid WML"
-  (wml-sort-tag-contents wml))
+(defclass wml-node ()
+  ((name :initarg :name :initform nil :reader wml-node-name)
+   (parent :initform nil :reader wml-node-parent)
+   (attributes :initform nil :accessor %wml-node-attributes)
+   (children :initform nil :accessor %wml-node-children)
+   (last-child :initform nil :accessor wml-node-last-child)))
 
-(defun wml-sort-tag-contents (wml)
-  "sorts all attributes within tag contents"
-  (stable-sort wml #'wml-node-compare)
-  (mapcar #'(lambda (wml-node)
-	      (if (wml-tag-p wml-node)
-		  (wml-sort-tag-contents (cdr wml-node))
-		  wml-node))
-	  wml)
-  wml)
+(defstruct attribute
+  value
+  text-domain)
 
-(defun wml-node-compare (wml-a wml-b)
-  ""
-  (when (and (wml-attr-p wml-a)
-	     (wml-attr-p wml-b)
-	     (not (wml-comment-p wml-a))
-	     (not (wml-comment-p wml-b)))
-    (string-lessp (car wml-a) (car wml-b))))
+(defun wml-node-assoc (item alist)
+  (assoc item alist :test #'equal))
 
-(defun encode-wml-to-string (wml)
-  "takes a WML alist and converts it to a string that can be sent to the wesnoth server"
-  (wml-alist-to-string (wml-alist-sort wml)))
+(defmethod (setf %wml-node-children) :after (value (node wml-node))
+  (setf (wml-node-last-child node) (last value)))
 
-(defun wml-assoc (item wml)
-  (assoc item wml :test #'equal))
+(defmethod wml-node-append-child ((node wml-node) child)
+  (when (wml-node-parent child)
+    (wml-node-remove-child (wml-node-parent child) child))
+  (setf (slot-value child 'parent) node)
+  (if (%wml-node-children node)
+      (setf (wml-node-last-child node)
+	    (push child (cdr (wml-node-last-child node))))
+      (setf (%wml-node-children node) (list child)))
+  (%wml-node-children node))
 
-(defun wml-assoc-all (item wml)
-  (remove-if-not #'(lambda (node) (equal item (car node))) wml))
+(defmethod wml-node-remove-child ((node wml-node) child)
+  (setf (%wml-node-children node)
+	(remove child (%wml-node-children node)))
+  (setf (slot-value child 'parent) nil))
+
+(defmethod wml-node-attribute ((node wml-node) key)
+  (cdr (wml-node-assoc key (%wml-node-attributes node))))
+
+(defmethod (setf wml-node-attribute) (new-value (node wml-node) key)
+  (let ((old-attribute (wml-node-assoc key (%wml-node-attributes node))))
+    (if old-attribute
+	(setf (attribute-value (cdr old-attribute)) new-value)
+	(push (cons key (make-attribute :value new-value))
+	      (%wml-node-attributes node)))))
+
+(defmethod (setf wml-node-attribute-text-domain) (new-value (node wml-node) key)
+  (let ((old-attribute (wml-node-assoc key (%wml-node-attributes node))))
+    (if old-attribute
+	(setf (attribute-text-domain (cdr old-attribute)) new-value)
+	(error "can not set attribute's text domain if it hasn't already been created"))))
+
+(defmethod insert-wml-node-attribute ((node wml-node) key value &optional text-domain)
+  (let ((attribute (make-attribute :value value :text-domain text-domain)))
+    (push (cons key attribute) (%wml-node-attributes node))))
+
+(defmethod wml-node-find-child-by-name ((node wml-node) child-name)
+  (loop for child in (%wml-node-children node) do
+       (when (equal child-name
+		    (wml-node-name child))
+	 (return child))))
+
+(defun esrap->wml-node (wml &optional name)
+  (let ((node (make-instance 'wml-node :name name)))
+    (loop for element in wml do
+	 (cond ((eql :attribute (car element))
+		(insert-wml-node-attribute node
+					   (cadr element)
+					   (caddr element)
+					   (cadddr element)))
+
+	       ((eql :open (caar element))
+		(wml-node-append-child
+		 node
+		 (esrap->wml-node (cadr element) (cadar element))))))
+    node))
+
+(defmethod serialize-wml-node ((node wml-node))
+  (format nil "~a~{~a~}~{~a~}~a"
+	  (wml-node-name-open-tag (wml-node-name node))
+	  (mapcar #'serialize-wml-node-attribute
+		  (sort 
+		   (%wml-node-attributes node)
+		   (lambda (a1 a2)
+		     (string-lessp (car a1) (car a2)))))
+	  (mapcar #'serialize-wml-node (%wml-node-children node))
+	  (wml-node-name-close-tag (wml-node-name node))))
+
+(defun wml-node-name-open-tag (name)
+  (if name
+      (format nil "[~a]~%" name)
+      ""))
+
+(defun wml-node-name-close-tag (name)
+  (if name
+      (format nil "[/~a]~%" name)
+      ""))
+
+(defun serialize-wml-node-attribute (attribute)
+  (if (attribute-text-domain (cdr attribute))
+      (format nil "#textdomain ~a~%~a=\"~a\"~%"
+	      (attribute-text-domain (cdr attribute))
+	      (car attribute)
+	      (attribute-value (cdr attribute)))
+      (format nil "~a=\"~a\"~%"
+	      (car attribute)
+	      (attribute-value (cdr attribute)))))

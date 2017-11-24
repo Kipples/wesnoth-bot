@@ -42,47 +42,52 @@
 	  (funcall (wesnoth-bot-command-handler command) command-params)))))
 
 (defmethod %write-wml ((bot wesnoth-bot) wml)
-  (write-wesnoth-wml-string (%wesnoth-connection bot) (encode-wml-to-string wml)))
+  (write-wesnoth-wml-string (%wesnoth-connection bot) (serialize-wml-node wml)))
 
 (defmethod %read-wml ((bot wesnoth-bot))
   (when (%runningp bot)
     (let ((string (read-wesnoth-wml-string (%wesnoth-connection bot))))
-      ;;    (format t "raw wml-string: ~a~%" string)
       (parse-wml-string string))))
 
 (defmethod %write-wml-version ((bot wesnoth-bot))
-  (%write-wml bot `(("version" ("version" . ,(wesnoth-bot-version bot))))))
+  (%write-wml bot (parse-wml-string (format nil "[version]~%version=\"~a\"~%[/version]~%"
+					    (wesnoth-bot-version bot)))))
 
 (defmethod %write-wml-login ((bot wesnoth-bot) &optional (password))
-  (%write-wml bot `(("login" ("username" . ,(wesnoth-bot-username bot))
-			     ("password_reminder" . "no")
-			     ,@(when password
-				 `(("password" . ,password)))))))
+  (%write-wml bot
+	      (parse-wml-string
+	       (format nil "[login]~%username=\"~a\"~%password_reminder=no~%~a[/login]~%"
+		       (wesnoth-bot-username bot)
+		       (if password
+			   (format nil "password=~a~%" password)
+			   "")))))
 
 (defmethod %handle-server-response ((bot wesnoth-bot) wml)
   (cond
-    ((wml-assoc "reject" wml) (handle-reject bot wml))
-    ((wml-assoc "redirect" wml) (handle-redirect bot wml))
-    ((wml-assoc "version" wml) (handle-version bot wml))
-    ((wml-assoc "mustlogin" wml) (handle-mustlogin bot wml))
-    ((wml-assoc "join_lobby" wml) (handle-join-lobby bot wml))
-    ((wml-assoc "error" wml) (handle-error bot wml))
-    ((and (wml-assoc "gamelist" wml) (wml-assoc "user" wml)) (handle-lobby-data bot wml))
-    ((wml-assoc "message" wml) (handle-message bot wml))
-    ((wml-assoc "whisper" wml) (handle-whisper bot wml))
-    ((wml-assoc "gamelist_diff" wml) (handle-lobby-data-diff bot wml))
-    ((wml-assoc "ping" wml) (handle-ping bot wml))
-    ((wml-assoc "scenario_diff" wml) (handle-scenario-diff bot wml))
-    ((wml-assoc "multiplayer" wml) (handle-multiplayer bot wml))
-    ((wml-assoc "leave_game" wml) (handle-leave-game bot wml))
-    ((wml-assoc "stop_updates" wml) (handle-stop-updates bot wml))
-    ((wml-assoc "change_controller" wml) (handle-change-controller bot wml))
-    ((wml-assoc "start_game" wml) (handle-start-game bot wml))
-    ((wml-assoc "turn" wml) (handle-turn bot wml))
-    ((wml-assoc "host_transfer" wml) (handle-host-transfer bot wml))
-    ((wml-assoc "observer" wml) (handle-observer bot wml))
-    ((wml-assoc "observer_quit" wml) (handle-observer-quit bot wml))
-    (t (error "bot does not know how to handle ~a." wml))))
+    ((wml-node-find-child-by-name wml "reject") (handle-reject bot wml))
+    ((wml-node-find-child-by-name wml "redirect") (handle-redirect bot wml))
+    ((wml-node-find-child-by-name wml "version") (handle-version bot wml))
+    ((wml-node-find-child-by-name wml "mustlogin") (handle-mustlogin bot wml))
+    ((wml-node-find-child-by-name wml "join_lobby") (handle-join-lobby bot wml))
+    ((wml-node-find-child-by-name wml "error") (handle-error bot wml))
+    ((and (wml-node-find-child-by-name wml "gamelist")
+	  (wml-node-find-child-by-name wml "user"))
+     (handle-lobby-data bot wml))
+    ((wml-node-find-child-by-name wml "message") (handle-message bot wml))
+    ((wml-node-find-child-by-name wml "whisper") (handle-whisper bot wml))
+    ((wml-node-find-child-by-name wml "gamelist_diff") (handle-lobby-data-diff bot wml))
+    ((wml-node-attribute wml "ping") (handle-ping bot wml))
+    ((wml-node-find-child-by-name wml "scenario_diff") (handle-scenario-diff bot wml))
+    ((wml-node-find-child-by-name wml "multiplayer") (handle-multiplayer bot wml))
+    ((wml-node-find-child-by-name wml "leave_game") (handle-leave-game bot wml))
+    ((wml-node-find-child-by-name wml "stop_updates") (handle-stop-updates bot wml))
+    ((wml-node-find-child-by-name wml "change_controller") (handle-change-controller bot wml))
+    ((wml-node-find-child-by-name wml "start_game") (handle-start-game bot wml))
+    ((wml-node-find-child-by-name wml "turn") (handle-turn bot wml))
+    ((wml-node-find-child-by-name wml "host_transfer") (handle-host-transfer bot wml))
+    ((wml-node-find-child-by-name wml "observer") (handle-observer bot wml))
+    ((wml-node-find-child-by-name wml "observer_quit") (handle-observer-quit bot wml))
+    (t (error "bot does not know how to handle ~a." (serialize-wml-node wml)))))
 
 (defmethod initialize-instance :after ((bot wesnoth-bot) &key &allow-other-keys)
   (with-slots (wesnoth-connection) bot
@@ -90,12 +95,13 @@
 
 (defmethod handle-reject ((bot wesnoth-bot) wml)
   (error "server version: ~a does not match bot version: ~a"
-	 (wml-assoc "accepted_versions" (wml-assoc "reject" wml))
+	 "FIXMEKIPPLES"
 	 (wesnoth-bot-version bot)))
 
 (defmethod handle-redirect ((bot wesnoth-bot) wml)
-  (let ((host (cdr (wml-assoc "host" (cdr (wml-assoc "redirect" wml)))))
-	(port (cdr (wml-assoc "port" (cdr (wml-assoc "redirect" wml))))))
+  (let* ((redirect (wml-node-find-child-by-name wml "redirect"))
+	 (host (wml-node-attribute redirect "host"))
+	 (port (wml-node-attribute redirect "port")))
     (redirect-connection (%wesnoth-connection bot) host (parse-integer port))))
 
 (defmethod handle-version ((bot wesnoth-bot) wml)
@@ -109,12 +115,12 @@
 (defmethod handle-lobby-data ((bot wesnoth-bot) wml))
 
 (defmethod handle-message ((bot wesnoth-bot) wml)
-  (let ((message (cdr (wml-assoc "message" (cdr (wml-assoc "message" wml))))))
+  (let ((message (attribute-value (wml-node-attribute (wml-node-find-child-by-name wml "message") "message"))))
     (let ((*current-bot* bot))
       (dispatch-wesnoth-command bot message))))
 
 (defmethod handle-whisper ((bot wesnoth-bot) wml)
-  (let ((message (cdr (wml-assoc "message" (cdr (wml-assoc "whisper" wml))))))
+  (let ((message (attribute-value (wml-node-attribute (wml-node-find-child-by-name wml "whisper") "message"))))
     (let ((*current-bot* bot))
       (dispatch-wesnoth-command bot message))))
 
@@ -175,17 +181,12 @@
 (defmethod wml-message ((bot wesnoth-bot) message &optional (sender) (room))
   (%write-wml
    bot
-   `(("message" ("message" . ,message)
-		,@(when sender
-		    `(("sender" . ,sender)))
-		,@(when room
-		    `(("room" . ,room)))))))
+   (parse-wml-string (format nil "[message]~%message=\"~a\"~%[/message]~%" message))))
 
 (defmethod wml-whisper ((bot wesnoth-bot) receiver message &optional (sender))
-  `(("whisper" ("message" . ,message)
-	       ("receiver" . ,receiver)
-	       ,@ (when sender
-		    `(("sender" . ,sender))))))
+  (%write-wml
+   bot
+   (parse-wml-string (format nil "[whisper]~%receiver=\"~a\"~%message=\"~a\"~%[/whisper]~%" receiver message))))
 
 (defvar *default-command-prefix* "!")
 
