@@ -9,5 +9,6 @@
   :components ((:file "package")
 	       (:file "wesnoth-connection")
 	       (:file "wesnoth-hash")
+	       (:file "wesnoth-wml-node")
 	       (:file "wesnoth-wml")
                (:file "wesnoth-bot")))
